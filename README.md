@@ -1,1 +1,1 @@
-## Lightweight Omni-Scale Feature Learning and Alignment Network for Remote Sensing Image Change Detection
+## This repository provides the official implementation of LOSNet, and the corresponding manuscript has been submitted to GRSL.
