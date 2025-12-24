@@ -1,14 +1,17 @@
 from functools import partial
 
 import antialiased_cnns
+import math
 import torch
 import torch.nn as nn
 from thop import profile, clever_format
+from timm.layers import trunc_normal_tf_
 from timm.models import named_apply
 import torch.nn.functional as F
-from LCDNet.Zoo.EMCAD import act_layer, _init_weights, channel_shuffle, gcd
-from MyNet.MDGNetV2 import ChannelGate
-from model.EDED_M import log_feature, kernel_size
+from torch import Tensor
+
+from AACRNet.AACRNet import kernel_size
+from LCDNet.Zoo.EMCAD import _init_weights
 
 
 def act_layer(act, inplace=False, neg_slope=0.2, n_prelu=1):
@@ -30,12 +33,66 @@ def act_layer(act, inplace=False, neg_slope=0.2, n_prelu=1):
         raise NotImplementedError('activation layer [%s] is not found' % act)
     return layer
 
+def channel_shuffle(x: Tensor, groups: int) -> Tensor:
+    batchsize, num_channels, height, width = x.size()
+    channels_per_group = num_channels // groups
+
+    # reshape
+    x = x.view(batchsize, groups, channels_per_group, height, width)
+
+    x = torch.transpose(x, 1, 2).contiguous()
+
+    # flatten
+    x = x.view(batchsize, -1, height, width)
+
+    return x
+
+# from ECANet, in which y and b is set default to 2 and 1
+def kernel_size(in_channel):
+    """Compute kernel size for one dimension convolution in eca-net"""
+    k = int((math.log2(in_channel) + 1) // 2)  # parameters from ECA-net
+    if k % 2 == 0:
+        return k + 1
+    else:
+        return k
 
 def gcd(a, b):
     while b:
         a, b = b, a % b
     return a
 
+# Other types of layers can go here (e.g., nn.Linear, etc.)
+def _init_weights(module, name, scheme=''):
+    if isinstance(module, nn.Conv2d) or isinstance(module, nn.Conv3d):
+        if scheme == 'normal':
+            nn.init.normal_(module.weight, std=.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif scheme == 'trunc_normal':
+            trunc_normal_tf_(module.weight, std=.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif scheme == 'xavier_normal':
+            nn.init.xavier_normal_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif scheme == 'kaiming_normal':
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        else:
+            # efficientnet like
+            fan_out = module.kernel_size[0] * module.kernel_size[1] * module.out_channels
+            fan_out //= module.groups
+            nn.init.normal_(module.weight, 0, math.sqrt(2.0 / fan_out))
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+    elif isinstance(module, nn.BatchNorm2d) or isinstance(module, nn.BatchNorm3d):
+        nn.init.constant_(module.weight, 1)
+        nn.init.constant_(module.bias, 0)
+    elif isinstance(module, nn.LayerNorm):
+        nn.init.constant_(module.weight, 1)
+        nn.init.constant_(module.bias, 0)
 
 class BasicBlock(nn.Module):
     def __init__(self, in_channel):
@@ -454,18 +511,12 @@ class TAM(nn.Module):
         fuse1 = t1_w * t1
         fuse2 = t2_w * t2
         fuse = fuse1 + fuse2
-        if log:
-            log_list = [fuse]
-            feature_name_list = ["fuse"]
-            log_feature(log_list=log_list, module_name=module_name,
-                        feature_name_list=feature_name_list,
-                        img_name=img_name, module_output=True)
         return fuse
 
 
-class LCDNet(nn.Module):
+class LOSNet(nn.Module):
     def __init__(self):
-        super(LCDNetV3Pro, self).__init__()
+        super(LOSNet, self).__init__()
         channel_list = [16, 32, 64, 128, 256]
         self.backbone = LightBackboneV2(net_size=0.5)
 
@@ -508,17 +559,13 @@ class LCDNet(nn.Module):
         change_out = self.upsample_x2(p1)
         change_out = self.conv_out_change(change_out)
 
-        if log:
-            log_feature(log_list=[change_out], module_name='LCDNetV3PRO_Flow_CDD',
-                        feature_name_list=['change_out'],
-                        img_name=img_name, module_output=False)
         return change_out
 
 
 if __name__ == '__main__':
     a = torch.rand(1, 3, 256, 256)
     b = torch.rand(1, 3, 256, 256)
-    model = LCDNet()
+    model = LOSNet()
     # # 计算模型参数量
     flops, params = profile(model, inputs=(a, b))
     flops, params = clever_format([flops, params], "%.3f")
