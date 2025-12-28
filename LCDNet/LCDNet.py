@@ -1,18 +1,25 @@
+import math
 from functools import partial
 
 import antialiased_cnns
-import math
 import torch
 import torch.nn as nn
 from thop import profile, clever_format
 from timm.layers import trunc_normal_tf_
 from timm.models import named_apply
 import torch.nn.functional as F
-from torch import Tensor
 
-from AACRNet.AACRNet import kernel_size
-from LCDNet.Zoo.EMCAD import _init_weights
 
+def channel_shuffle(x, groups):
+    batchsize, num_channels, height, width = x.data.size()
+    channels_per_group = num_channels // groups
+    # reshape
+    x = x.view(batchsize, groups,
+               channels_per_group, height, width)
+    x = torch.transpose(x, 1, 2).contiguous()
+    # flatten
+    x = x.view(batchsize, -1, height, width)
+    return x
 
 def act_layer(act, inplace=False, neg_slope=0.2, n_prelu=1):
     # activation layer
@@ -33,20 +40,6 @@ def act_layer(act, inplace=False, neg_slope=0.2, n_prelu=1):
         raise NotImplementedError('activation layer [%s] is not found' % act)
     return layer
 
-def channel_shuffle(x: Tensor, groups: int) -> Tensor:
-    batchsize, num_channels, height, width = x.size()
-    channels_per_group = num_channels // groups
-
-    # reshape
-    x = x.view(batchsize, groups, channels_per_group, height, width)
-
-    x = torch.transpose(x, 1, 2).contiguous()
-
-    # flatten
-    x = x.view(batchsize, -1, height, width)
-
-    return x
-
 # from ECANet, in which y and b is set default to 2 and 1
 def kernel_size(in_channel):
     """Compute kernel size for one dimension convolution in eca-net"""
@@ -55,11 +48,6 @@ def kernel_size(in_channel):
         return k + 1
     else:
         return k
-
-def gcd(a, b):
-    while b:
-        a, b = b, a % b
-    return a
 
 # Other types of layers can go here (e.g., nn.Linear, etc.)
 def _init_weights(module, name, scheme=''):
@@ -93,6 +81,12 @@ def _init_weights(module, name, scheme=''):
     elif isinstance(module, nn.LayerNorm):
         nn.init.constant_(module.weight, 1)
         nn.init.constant_(module.bias, 0)
+
+def gcd(a, b):
+    while b:
+        a, b = b, a % b
+    return a
+
 
 class BasicBlock(nn.Module):
     def __init__(self, in_channel):
@@ -161,7 +155,7 @@ class LightBackboneV2(nn.Module):
             self.in_channels = out_channels
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, log=False, img_name=None):
         out = self.stem(x)
         x1 = self.layer1(out)
         x2 = self.layer2(x1)
@@ -174,7 +168,7 @@ configs = {
     0.5: {
         'in_channels': 16,
         'out_channels': (32, 64, 128, 256),
-        'num_blocks': (1, 1, 1, 1)
+        'num_blocks': (2, 2, 2, 2)
     },
     1.0: {
         'in_channels': 16,
@@ -228,7 +222,6 @@ class MSCB(nn.Module):
     """
     Multi-scale convolution block (MSCB)
     """
-
     def __init__(self, in_channels, out_channels, kernel_sizes=None, stride=1, expansion_factor=2, dw_parallel=True,
                  add=True, activation='gelu'):
         super(MSCB, self).__init__()
@@ -284,9 +277,11 @@ class MSCB(nn.Module):
         if self.use_skip_connection:
             if self.in_channels != self.out_channels:
                 x = self.conv1x1(x)
+
             return x + out
         else:
             return out
+
 
 
 def act_layer(act, inplace=False, neg_slope=0.2, n_prelu=1):
@@ -418,6 +413,7 @@ class AlignedModulev2(nn.Module):
 
 class SizeAware_Decoder(nn.Module):
     """Basic block in SizeAware_Decoder."""
+
     def __init__(self, in_channel, out_channel, activation='gelu'):
         super().__init__()
         self.activation = activation
@@ -477,7 +473,7 @@ class TAM(nn.Module):
         self.spatial_conv1 = nn.Conv2d(2, 1, kernel_size=7, padding=3)
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, t1, t2, log=False, module_name=None, img_name=None):
+    def forward(self, t1, t2):
         # change part
         diff = torch.abs(t1 - t2)
         # channel part
@@ -537,7 +533,7 @@ class LOSNet(nn.Module):
         )
         self.conv_out_change = nn.Conv2d(8, 1, kernel_size=7, stride=1, padding=3)
 
-    def forward(self, t1, t2, log=False, img_name=None):
+    def forward(self, t1, t2):
         # # 使用 self.backbone 提取多尺度特征
         t1_features = self.backbone(t1)  # 提取 t1 的多尺度特征
         t1_2, t1_3, t1_4, t1_5 = t1_features
