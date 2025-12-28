@@ -2,18 +2,6 @@ import sys
 
 from torch.utils.data import DataLoader
 
-from Ablation.BaseLine import BaseLine
-from Ablation.BaseLine_M1 import BaseLine_M1
-from Ablation.BaseLine_M2 import BaseLine_M2
-from MCPRNet.MCPRNet import MCPRNet
-from MyNet.MDGNetV5 import MDGNetv5
-from MyNet.PFNetv2 import PFNetV2
-from MyNet.PFNetv3 import PFNetV3
-from MyNet.PFNetv4 import PFNetV4
-from MyNet.PFNetv5 import PFNetV5
-from MyNet.PFNetv6 import PFNetV6
-from MyNet.PFNetv6_test import PFNetV6_test
-
 from utils.data_loading import BasicDataset
 import logging
 from utils.path_hyperparameter import ph
